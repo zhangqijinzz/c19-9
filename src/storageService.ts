@@ -1,8 +1,10 @@
 import type { LayoutDocument } from './types';
 
 export interface DocumentStorageService {
-  read(): Promise<LayoutDocument | null>;
+  /** 读取原始存档内容；结构是否有效交给迁移层判断，读取/解析失败时抛错 */
+  read(): Promise<unknown | null>;
   write(document: LayoutDocument): Promise<void>;
+  clear(): Promise<void>;
 }
 
 const STORAGE_KEY = 'exposketch.document.v1';
@@ -10,14 +12,14 @@ const STORAGE_KEY = 'exposketch.document.v1';
 const canUseIndexedDb = () => typeof indexedDB !== 'undefined';
 
 export class BrowserStorageService implements DocumentStorageService {
-  async read(): Promise<LayoutDocument | null> {
+  async read(): Promise<unknown | null> {
     if (!canUseIndexedDb()) {
       const raw = window.localStorage.getItem(STORAGE_KEY);
-      return raw ? (JSON.parse(raw) as LayoutDocument) : null;
+      return raw ? JSON.parse(raw) : null;
     }
-    return this.withDatabase((store) => new Promise<LayoutDocument | null>((resolve, reject) => {
+    return this.withDatabase((store) => new Promise<unknown | null>((resolve, reject) => {
       const request = store.get(STORAGE_KEY);
-      request.onsuccess = () => resolve((request.result as LayoutDocument | undefined) ?? null);
+      request.onsuccess = () => resolve((request.result as unknown | undefined) ?? null);
       request.onerror = () => reject(request.error ?? new Error('读取布局失败'));
     }));
   }
@@ -31,6 +33,18 @@ export class BrowserStorageService implements DocumentStorageService {
       const request = store.put(document, STORAGE_KEY);
       request.onsuccess = () => resolve();
       request.onerror = () => reject(request.error ?? new Error('保存布局失败'));
+    }));
+  }
+
+  async clear(): Promise<void> {
+    if (!canUseIndexedDb()) {
+      window.localStorage.removeItem(STORAGE_KEY);
+      return;
+    }
+    await this.withDatabase((store) => new Promise<void>((resolve, reject) => {
+      const request = store.delete(STORAGE_KEY);
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject(request.error ?? new Error('清理本地布局失败'));
     }));
   }
 

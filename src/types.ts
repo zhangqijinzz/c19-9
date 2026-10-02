@@ -76,3 +76,17 @@ export interface Notice {
   tone: 'info' | 'success' | 'warning' | 'error';
   message: string;
 }
+
+export interface DocumentIssue {
+  scope: 'document' | 'element';
+  /** 元素在原始存档中的序号，从 1 开始 */
+  index?: number;
+  elementId?: string;
+  severity: 'repaired' | 'dropped';
+  message: string;
+}
+
+export type LoadOutcome =
+  | { status: 'ok'; document: LayoutDocument }
+  | { status: 'repaired'; document: LayoutDocument; issues: DocumentIssue[] }
+  | { status: 'failed'; error: string; issues?: DocumentIssue[] };

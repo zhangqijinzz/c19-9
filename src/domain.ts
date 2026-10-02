@@ -33,6 +33,13 @@ export const createStarterDocument = (): LayoutDocument => ({
   ],
 });
 
+export const createBlankDocument = (): LayoutDocument => ({
+  version: 1,
+  title: '未命名布局',
+  field: { width: 28, height: 18 },
+  elements: [],
+});
+
 export const createElement = (kind: ElementKind, index: number, field: FieldSize): ExpoElement => {
   const spec = ELEMENT_SPECS[kind];
   const offset = Math.min(index * 0.65, 4);

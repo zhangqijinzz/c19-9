@@ -1,6 +1,6 @@
-import { createElement, createStarterDocument, analyzeLayout, findElement, getBoundingBox, normalizeRotation } from './domain';
+import { createBlankDocument, createElement, createStarterDocument, analyzeLayout, findElement, getBoundingBox, normalizeRotation } from './domain';
 import type { LayoutRepository } from './repository';
-import type { Analysis, ElementKind, LayoutDocument, LayoutMode, Notice, RenderElement, ViewPhase } from './types';
+import type { Analysis, DocumentIssue, ElementKind, LayoutDocument, LayoutMode, Notice, RenderElement, ViewPhase } from './types';
 
 export interface ExpoSketchState {
   phase: ViewPhase;
@@ -12,6 +12,10 @@ export interface ExpoSketchState {
   analysis: Analysis;
   notice: Notice;
   lastSavedAt: number | null;
+  /** 旧存档被自动修复后，逐条展示的修复/丢弃记录 */
+  loadIssues: DocumentIssue[];
+  /** 存档彻底无法读取时的原因说明 */
+  loadError: string | null;
 }
 
 const toRenderElements = (document: LayoutDocument): RenderElement[] => document.elements.map((element) => {
@@ -36,6 +40,8 @@ export class ExpoSketchViewModel {
     analysis: analyzeLayout(createStarterDocument()),
     notice: { tone: 'info', message: '正在恢复最近布局…' },
     lastSavedAt: null,
+    loadIssues: [],
+    loadError: null,
   };
 
   constructor(private readonly repository: LayoutRepository) {}
@@ -48,12 +54,78 @@ export class ExpoSketchViewModel {
   }
 
   async initialize() {
+    let outcome;
     try {
-      const document = await this.repository.load();
-      this.commit({ document, selectedId: document.elements[0]?.id ?? null, phase: 'ready', notice: { tone: 'success', message: '布局已就绪，可开始编辑' } });
+      outcome = await this.repository.load();
     } catch {
-      this.commit({ phase: 'error', notice: { tone: 'error', message: '布局读取失败，已载入安全示例' } });
+      this.commit({
+        phase: 'error',
+        loadError: '读取本地存档时发生未预期的错误。',
+        notice: { tone: 'error', message: '布局读取失败' },
+      });
+      return;
     }
+
+    if (outcome.status === 'failed') {
+      this.commit({
+        phase: 'error',
+        loadError: outcome.error,
+        loadIssues: outcome.issues ?? [],
+        notice: { tone: 'error', message: '布局读取失败' },
+      });
+      return;
+    }
+
+    const document = outcome.document;
+    if (outcome.status === 'repaired') {
+      const repaired = outcome.issues.filter((issue) => issue.severity === 'repaired').length;
+      const dropped = outcome.issues.length - repaired;
+      const detail = [`已自动修复 ${repaired} 项`, dropped > 0 ? `跳过 ${dropped} 条无法识别的元素` : null].filter(Boolean).join('，');
+      this.commit({
+        document,
+        selectedId: document.elements[0]?.id ?? null,
+        phase: 'ready',
+        loadIssues: outcome.issues,
+        notice: { tone: 'warning', message: `旧存档存在不完整内容，${detail}，可继续编辑` },
+      });
+      // 修复后的结构回写，避免下次打开再次出现同样的问题
+      this.persistQuietly();
+      return;
+    }
+
+    this.commit({ document, selectedId: document.elements[0]?.id ?? null, phase: 'ready', notice: { tone: 'success', message: '布局已就绪，可开始编辑' } });
+  }
+
+  dismissLoadIssues() {
+    this.commit({ loadIssues: [] });
+  }
+
+  /** 存档彻底损坏时的入口：清掉坏数据，从空白场地重新开始 */
+  async startBlank() {
+    await this.restartWith(createBlankDocument(), '已清空损坏的存档，可从空白场地重新开始');
+  }
+
+  /** 存档彻底损坏时的入口：清掉坏数据，载入示例布局 */
+  async startExample() {
+    await this.restartWith(createStarterDocument(), '已清空损坏的存档，载入了示例布局');
+  }
+
+  private async restartWith(document: LayoutDocument, message: string) {
+    try {
+      await this.repository.clear();
+    } catch {
+      // 即使清理失败也继续：紧接着的保存会把坏存档覆盖掉
+    }
+    this.commit({
+      document,
+      selectedId: document.elements[0]?.id ?? null,
+      mode: 'edit',
+      phase: 'ready',
+      loadError: null,
+      loadIssues: [],
+      notice: { tone: 'success', message },
+    });
+    this.persistQuietly();
   }
 
   selectElement(id: string) { this.commit({ selectedId: id }); }
@@ -117,6 +189,15 @@ export class ExpoSketchViewModel {
   private commitAndPersist(patch: Partial<ExpoSketchState>) {
     this.commit(patch);
     void this.persist();
+  }
+
+  private async persistQuietly() {
+    try {
+      await this.repository.save(this.stateValue.document);
+      this.commit({ lastSavedAt: Date.now() });
+    } catch {
+      // 静默回写失败不打断当前流程，下一次编辑保存时还会重试
+    }
   }
 
   private async persist() {

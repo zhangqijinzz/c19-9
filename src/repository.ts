@@ -1,38 +1,48 @@
 import { createStarterDocument } from './domain';
+import { migrateDocument } from './documentMigration';
 import type { DocumentStorageService } from './storageService';
-import type { ExpoElement, LayoutDocument } from './types';
+import type { LayoutDocument, LoadOutcome } from './types';
 
 export interface LayoutRepository {
-  load(): Promise<LayoutDocument>;
+  load(): Promise<LoadOutcome>;
   save(document: LayoutDocument): Promise<void>;
+  clear(): Promise<void>;
 }
-
-const isElement = (value: unknown): value is ExpoElement => {
-  if (!value || typeof value !== 'object') return false;
-  const element = value as Record<string, unknown>;
-  return typeof element.id === 'string' && typeof element.kind === 'string' && typeof element.x === 'number' && typeof element.y === 'number' && typeof element.width === 'number' && typeof element.height === 'number' && typeof element.rotation === 'number';
-};
-
-const isDocument = (value: unknown): value is LayoutDocument => {
-  if (!value || typeof value !== 'object') return false;
-  const document = value as Record<string, unknown>;
-  const field = document.field as Record<string, unknown> | undefined;
-  return document.version === 1 && typeof document.title === 'string' && !!field && typeof field.width === 'number' && typeof field.height === 'number' && Array.isArray(document.elements) && document.elements.every(isElement);
-};
 
 export class LocalLayoutRepository implements LayoutRepository {
   constructor(private readonly storage: DocumentStorageService) {}
 
-  async load(): Promise<LayoutDocument> {
+  async load(): Promise<LoadOutcome> {
+    let raw: unknown = null;
     try {
-      const saved = await this.storage.read();
-      return isDocument(saved) ? saved : createStarterDocument();
+      raw = await this.storage.read();
     } catch {
-      return createStarterDocument();
+      return { status: 'failed', error: '无法读取本地存档（本地数据库或浏览器存储不可用）。' };
+    }
+
+    if (raw === null || raw === undefined) {
+      return { status: 'ok', document: createStarterDocument() };
+    }
+
+    try {
+      const result = migrateDocument(raw);
+      if (!result.document || result.fatal) {
+        return { status: 'failed', error: result.fatal ?? '存档无法识别。', issues: result.issues };
+      }
+      if (result.issues.length > 0) {
+        return { status: 'repaired', document: result.document, issues: result.issues };
+      }
+      return { status: 'ok', document: result.document };
+    } catch (cause) {
+      return { status: 'failed', error: cause instanceof Error ? cause.message : '解析存档时发生未知错误。' };
     }
   }
 
   async save(document: LayoutDocument): Promise<void> {
     await this.storage.write(document);
+  }
+
+  async clear(): Promise<void> {
+    await this.storage.clear();
   }
 }
