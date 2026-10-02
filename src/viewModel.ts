@@ -1,6 +1,6 @@
 import { createElement, createStarterDocument, analyzeLayout, findElement, getBoundingBox, normalizeRotation } from './domain';
 import type { LayoutRepository } from './repository';
-import type { Analysis, ElementKind, LayoutDocument, LayoutMode, Notice, RenderElement, ViewPhase } from './types';
+import type { Analysis, DocumentReport, ElementKind, LayoutDocument, LayoutMode, Notice, RenderElement, ViewPhase } from './types';
 
 export interface ExpoSketchState {
   phase: ViewPhase;
@@ -11,6 +11,7 @@ export interface ExpoSketchState {
   mode: LayoutMode;
   analysis: Analysis;
   notice: Notice;
+  loadReport: DocumentReport;
   lastSavedAt: number | null;
 }
 
@@ -35,6 +36,7 @@ export class ExpoSketchViewModel {
     mode: 'edit',
     analysis: analyzeLayout(createStarterDocument()),
     notice: { tone: 'info', message: '正在恢复最近布局…' },
+    loadReport: { status: 'clean', issues: [] },
     lastSavedAt: null,
   };
 
@@ -49,10 +51,17 @@ export class ExpoSketchViewModel {
 
   async initialize() {
     try {
-      const document = await this.repository.load();
-      this.commit({ document, selectedId: document.elements[0]?.id ?? null, phase: 'ready', notice: { tone: 'success', message: '布局已就绪，可开始编辑' } });
+      const { document, report } = await this.repository.load();
+      if (report.status === 'fatal') {
+        this.commit({ loadReport: report, phase: 'error', notice: { tone: 'error', message: '本地存档无法读取' } });
+        return;
+      }
+      const notice: Notice = report.status === 'repaired'
+        ? { tone: 'warning', message: `存档不完整，已按缺省值自动修复 ${report.issues.length} 处` }
+        : { tone: 'success', message: '布局已就绪，可开始编辑' };
+      this.commit({ document, loadReport: report, selectedId: document.elements[0]?.id ?? null, phase: 'ready', notice });
     } catch {
-      this.commit({ phase: 'error', notice: { tone: 'error', message: '布局读取失败，已载入安全示例' } });
+      this.commit({ loadReport: { status: 'fatal', issues: [{ path: 'storage', message: '读取存档时发生未知错误' }] }, phase: 'error', notice: { tone: 'error', message: '布局读取失败' } });
     }
   }
 
@@ -111,7 +120,7 @@ export class ExpoSketchViewModel {
 
   resetExample() {
     const document = createStarterDocument();
-    this.commitAndPersist({ document, selectedId: 'stage-1', mode: 'edit', notice: { tone: 'success', message: '已恢复示例布局' } });
+    this.commitAndPersist({ document, selectedId: 'stage-1', mode: 'edit', phase: 'ready', loadReport: { status: 'clean', issues: [] }, notice: { tone: 'success', message: '已恢复示例布局' } });
   }
 
   private commitAndPersist(patch: Partial<ExpoSketchState>) {

@@ -76,3 +76,15 @@ export interface Notice {
   tone: 'info' | 'success' | 'warning' | 'error';
   message: string;
 }
+
+export type DocumentLoadStatus = 'clean' | 'repaired' | 'fatal';
+
+export interface DocumentIssue {
+  path: string;
+  message: string;
+}
+
+export interface DocumentReport {
+  status: DocumentLoadStatus;
+  issues: DocumentIssue[];
+}
